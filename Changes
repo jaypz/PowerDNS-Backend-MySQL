@@ -1,5 +1,9 @@
 Revision history for PowerDNS-Backend-MySQL
 
+0.02	Fri Jan 18 11:12:55 PST 2008
+	Fixed small syntax bug in author POD area.
+	Set the proper PREREQ_PM.
+
 0.01    Tue Dec  4 11:46:42 PST 2007
         Initial release.
 
