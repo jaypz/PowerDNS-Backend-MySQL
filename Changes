@@ -1,5 +1,9 @@
 Revision history for PowerDNS-Backend-MySQL
 
+0.03	Fri Feb 15 15:16:38 PST 2008
+	Removed spurious errors from destructor; thanks Jan-Piet Mens <jp@mens.de> who spotted this.
+	Removed pointless finish statement in the add_domain method.
+
 0.02	Fri Jan 18 11:12:55 PST 2008
 	Fixed small syntax bug in author POD area.
 	Set the proper PREREQ_PM.

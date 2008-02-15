@@ -13,11 +13,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 =cut
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 =head1 SYNOPSIS
 
@@ -141,7 +141,10 @@ sub new
 sub DESTROY
 {
 	my $self = shift;
-	$self->{'dbh'}->disconnect or warn $self->{'dbh'}->errstr;
+	if ( defined $self->{'dbh'} )
+	{
+		$self->{'dbh'}->disconnect or warn $self->{'dbh'}->errstr;
+	}
 }
 
 =head2 add_domain(\$domain)
@@ -274,8 +277,6 @@ sub domain_exists($)
 	$sth->execute($$domain) or return 0;
 	
 	my @record = $sth->fetchrow_array;
-	
-	$sth->finish;
 	
 	scalar(@record) ? return 1 : return 0;
 }
@@ -610,7 +611,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.02
+	0.03
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
