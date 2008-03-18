@@ -13,11 +13,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.03
+Version 0.04
 
 =cut
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 =head1 SYNOPSIS
 
@@ -143,7 +143,7 @@ sub DESTROY
 	my $self = shift;
 	if ( defined $self->{'dbh'} )
 	{
-		$self->{'dbh'}->disconnect or warn $self->{'dbh'}->errstr;
+		delete $self->{'dbh'} or warn "$!\n";
 	}
 }
 
@@ -611,7 +611,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.03
+	0.04
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
