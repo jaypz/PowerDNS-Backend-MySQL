@@ -13,11 +13,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.04
+Version 0.05
 
 =cut
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 =head1 SYNOPSIS
 
@@ -284,7 +284,8 @@ sub domain_exists($)
 =head2 list_records(\$rr , \$domain)
 
 Expects two scalar references; the first to a resource record and the second to a domain name.
-Returns a reference to a two-dimensional array which contains the resource record name and content if any.
+Returns a reference to a two-dimensional array which contains the resource record name, content, 
+TTL, and priority if any.
 
 =cut
 
@@ -295,11 +296,11 @@ sub list_records($$)
 	my $domain = shift;
 	my @records;
 	
-	my $sth = $self->{'dbh'}->prepare("SELECT name,content FROM records WHERE type = ? and domain_id = (SELECT id FROM domains WHERE name = ?)");
+	my $sth = $self->{'dbh'}->prepare("SELECT name,content,ttl,prio FROM records WHERE type = ? and domain_id = (SELECT id FROM domains WHERE name = ?)");
 	$sth->execute($$rr,$$domain);
 	
-	while ( my ($name,$content) = $sth->fetchrow_array )
-	{ push @records , [ ($name,$content) ]; } # push anonymous array on to end.
+	while ( my ($name,$content,$ttl,$prio) = $sth->fetchrow_array )
+	{ push @records , [ ($name,$content,$ttl,$prio) ]; } # push anonymous array on to end.
 	
 	return \@records;
 }
@@ -556,6 +557,12 @@ sub get_master($)
 	my $master = $pdns->get_master(\$domain);
 	print "Master: $master\n";
 
+=head1 NOTES
+
+Because PowerDNS::Backend::MySQL uses DBI you can get the last DBI error from the 
+global variable "$DBI::errstr"; this can be handy when you want more details as to
+why a particular method failed.
+
 =head1 AUTHOR
 
 Augie Schwer, C<< <augie at cpan.org> >>
@@ -611,7 +618,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.04
+	0.05
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
