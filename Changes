@@ -1,5 +1,8 @@
 Revision history for PowerDNS-Backend-MySQL
 
+0.06	Wed May  7 15:24:50 PDT 2008
+	Added the 'update_records' method.
+
 0.05	Fri Mar 21 10:27:27 PDT 2008
 	list_records() now returns the full records attribute list (name,content,ttl,prio) instead of just name and content. #33569: FrancescoLovergine <frankie [...] debian.org> .
 	Created a note about $DBI::errstr .

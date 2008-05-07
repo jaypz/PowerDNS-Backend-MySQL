@@ -13,11 +13,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.05
+Version 0.06
 
 =cut
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 =head1 SYNOPSIS
 
@@ -357,13 +357,18 @@ sub delete_record($$)
 =head2 update_record(\$rr1 , \$rr2 , \$domain)
 
 Updates a single record in the backend.
+
 Expects three scalar references:
+
 1) A reference to an array that contains the Resource Record to be updated;
    ($name , $type , $content) - all required.
+
 2) A reference to an array that contains the updated values;
    ($name , $type , $content , $ttl , $prio) - only $name , $type , $content are required.
    Defaults for $ttl and $prio will be used if none are given.
+
 3) The domain to be updated.
+
 Returns 1 on a successful update, and 0 when un-successful.
 
 =cut
@@ -389,7 +394,51 @@ sub update_record($$$)
 	$rv ? return 1 : return 0;
 }
 
-=head2 find_record_by_content($$)
+=head2 update_records(\$rr1 , \$rr2 , \$domain)
+
+Can update multiple records in the backend.
+
+Like update_record() but without the requirement that the 'content' be set in the resource record(s) you are trying to update; 
+also not limited to updating just one record, but can update any number of records that match the resource record you are 
+looking for.
+
+Expects three scalar references:
+
+1) A reference to an array that contains the Resource Record to be updated;
+   ($name , $type) - all required.
+
+2) A reference to an array that contains the updated values;
+   ($name , $type , $content , $ttl , $prio) - only $name , $type , $content are required.
+   Defaults for $ttl and $prio will be used if none are given.
+
+3) The domain to be updated.
+
+Returns 1 on a successful update, and 0 when un-successful.
+
+=cut
+
+sub update_records($$$)
+{
+	my $self = shift;
+	my $rr1 = shift;
+	my $rr2 = shift;
+	my $domain = shift;
+	my ($name1 , $type1 ) = @$rr1;
+	my ($name2 , $type2 , $content2 , $ttl , $prio) = @$rr2;
+	
+	# Default values.
+	if ( ! defined $ttl or $ttl eq '' ) { $ttl = 7200; }
+	if ( ! defined $prio or $prio eq '' ) { $prio = 0; }
+	
+	my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and domain_id = (SELECT id FROM domains WHERE name = ?)");
+	
+	# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
+	my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$$domain);
+	
+	$rv ? return 1 : return 0;
+}
+
+=head2 find_record_by_content(\$content , \$domain)
 
 Finds a specific (single) record in the backend.
 Expects two scalar references; the first is the content we are looking for, and the second is the domain to be checked.
@@ -618,7 +667,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.05
+	0.06
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
