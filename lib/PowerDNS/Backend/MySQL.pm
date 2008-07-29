@@ -4,6 +4,7 @@
 package PowerDNS::Backend::MySQL;
 
 use DBI;
+use Carp;
 use strict;
 use warnings;
 
@@ -13,11 +14,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.06
+Version 0.07
 
 =cut
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 =head1 SYNOPSIS
 
@@ -33,6 +34,8 @@ our $VERSION = '0.06';
 			mysql_warn		=>	1,
 			mysql_auto_commit	=>	1,
 			mysql_auto_reconnect	=>	1,
+			lock_name		=>	'powerdns_backend_mysql',
+			lock_timeout		=>	3,
 	};
 
 	my $pdns = PowerDNS::Backend::MySQL->new($params);
@@ -55,6 +58,8 @@ our $VERSION = '0.06';
 			mysql_warn		=>	1,
 			mysql_auto_commit	=>	1,
 			mysql_auto_reconnect	=>	1,
+			lock_name		=>	'powerdns_backend_mysql',
+			lock_timeout		=>	3,
 	};
 
 	my $pdns = PowerDNS::Backend::MySQL->new($params);
@@ -99,6 +104,18 @@ Used to set the DBI::AutoCommit value.
 
 Used to set the DBD::mysql::mysql_auto_reconnect value.
 
+=item lock_name
+
+Critical sections (adds, deletes, updates on records) get MySQL application level locks 
+(GET_LOCK : http://dev.mysql.com/doc/refman/5.0/en/miscellaneous-functions.html#function_get-lock);
+this option can be used to override the default lock name used in those calls.
+
+=item lock_timeout
+
+Critical sections (adds, deletes, updates on records) get MySQL application level locks 
+(GET_LOCK : http://dev.mysql.com/doc/refman/5.0/en/miscellaneous-functions.html#function_get-lock);
+this option can be used to override the default lock timeout used in those calls.
+
 =back
 
 =cut
@@ -116,6 +133,9 @@ sub new
 	my $db_name = defined $params->{db_name} ? $params->{db_name} : 'pdns';
 	my $db_port = defined $params->{db_port} ? $params->{db_port} : '3306';
 	my $db_host = defined $params->{db_host} ? $params->{db_host} : 'localhost';
+
+	$self->{'lock_name'} = defined $params->{lock_name} ? $params->{lock_name} : 'powerdns_backend_mysql';
+	$self->{'lock_timeout'} = defined $params->{lock_timeout} ? $params->{lock_timeout} : 3;
 
 	my $mysql_print_error = $params->{mysql_print_error} ? defined $params->{mysql_print_error} : 1;
 	my $mysql_warn = $params->{mysql_warn} ? defined $params->{mysql_warn} : 1;
@@ -145,6 +165,43 @@ sub DESTROY
 	{
 		delete $self->{'dbh'} or warn "$!\n";
 	}
+}
+
+# Internal Method.
+# Get a lock on the database to avoid race conditions.
+# Returns 1 on success and 0 on failure.
+sub _lock
+{
+        my $self = shift;
+	my $lock_name = $self->{'lock_name'};
+	my $lock_timeout = $self->{'lock_timeout'};
+
+        my $sth = $self->{'dbh'}->prepare("SELECT GET_LOCK('$lock_name',$lock_timeout)");
+        if ( ! $sth->execute )
+        {
+             return 0;
+        }
+
+        my ($rv) = $sth->fetchrow_array;
+        return $rv;
+}
+
+# Internal Method.
+# Release a lock on the database.
+# Returns 1 on success and 0 on failure.
+sub _unlock
+{
+        my $self = shift;
+	my $lock_name = $self->{'lock_name'};
+
+        my $sth = $self->{'dbh'}->prepare("SELECT RELEASE_LOCK('$lock_name')");
+        if ( ! $sth->execute )
+        {
+             return 0;
+        }
+
+        my ($rv) = $sth->fetchrow_array;
+        return $rv;
 }
 
 =head2 add_domain(\$domain)
@@ -325,9 +382,23 @@ sub add_record($$)
 	# Default values.
 	if ( ! defined $ttl or $ttl eq '' ) { $ttl = 7200; }
 	if ( ! defined $prio or $prio eq '' ) { $prio = 0; }
-	
+
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
+
 	my $sth = $self->{'dbh'}->prepare("INSERT INTO records (domain_id,name,type,content,ttl,prio) SELECT id,?,?,?,?,? FROM domains WHERE name = ?");
-	$sth->execute($name,$type,$content,$ttl,$prio,$$domain) or return 0;
+	unless ( $sth->execute($name,$type,$content,$ttl,$prio,$$domain) )
+	{
+		$self->_unlock;
+		return 0;
+	}
+
+	# Release server lock.
+	$self->_unlock;
 	
 	return 1;
 }
@@ -348,10 +419,21 @@ sub delete_record($$)
 	my $rr = shift;
 	my $domain = shift;
 	my ($name , $type , $content) = @$rr;
+
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
 	
 	my $sth = $self->{'dbh'}->prepare("DELETE FROM records WHERE name=? and type=? and content=? and domain_id = (SELECT id FROM domains WHERE name = ?) LIMIT 1");
-	
-	$sth->execute($name,$type,$content,$$domain) == 1 ? return 1 : return 0;
+	my $rv = $sth->execute($name,$type,$content,$$domain);
+
+	# Release server lock.
+	$self->_unlock;
+
+	return $rv;
 }
 
 =head2 update_record(\$rr1 , \$rr2 , \$domain)
@@ -386,10 +468,19 @@ sub update_record($$$)
 	if ( ! defined $ttl or $ttl eq '' ) { $ttl = 7200; }
 	if ( ! defined $prio or $prio eq '' ) { $prio = 0; }
 	
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
+
 	my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and content=? and domain_id = (SELECT id FROM domains WHERE name = ?) LIMIT 1");
-	
 	# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
 	my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$content1,$$domain);
+
+	# Release server lock.
+	$self->_unlock;
 	
 	$rv ? return 1 : return 0;
 }
@@ -430,12 +521,97 @@ sub update_records($$$)
 	if ( ! defined $ttl or $ttl eq '' ) { $ttl = 7200; }
 	if ( ! defined $prio or $prio eq '' ) { $prio = 0; }
 	
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
+
 	my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and domain_id = (SELECT id FROM domains WHERE name = ?)");
-	
 	# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
 	my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$$domain);
 	
+	# Release server lock.
+	$self->_unlock;
+
 	$rv ? return 1 : return 0;
+}
+
+=head2 update_or_add_records(\$rr1 , \$rr2 , \$domain)
+
+Can update multiple records in the backend; will insert records if they don't already exist.
+
+Expects three scalar references:
+
+1) A reference to an array that contains the Resource Record to be updated;
+   ($name , $type) - all required.
+
+2) A reference to an array that contains the updated values;
+   ($name , $type , $content , $ttl , $prio) - only $name , $type , $content are required.
+   Defaults for $ttl and $prio will be used if none are given.
+
+3) The domain to be updated.
+
+Returns 1 on a successful update, and 0 when un-successful.
+
+=cut
+
+sub update_or_add_records($$$)
+{
+	my $self = shift;
+	my $rr1 = shift;
+	my $rr2 = shift;
+	my $domain = shift;
+	my ($name1 , $type1 ) = @$rr1;
+	my ($name2 , $type2 , $content2 , $ttl , $prio) = @$rr2;
+	
+	# Default values.
+	if ( ! defined $ttl or $ttl eq '' ) { $ttl = 7200; }
+	if ( ! defined $prio or $prio eq '' ) { $prio = 0; }
+
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
+
+	# See if record exists in zone.
+	my $sth = $self->{'dbh'}->prepare('SELECT COUNT(*) FROM records WHERE name = ? AND type = ? AND domain_id = (SELECT id FROM domains WHERE name = ?)');
+	unless ( $sth->execute($name1,$type1,$$domain) )
+	{
+		$sth->_unlock;
+		return 0;
+	}
+	
+	my ($count) = $sth->fetchrow_array;
+
+	if ( $count == 0 ) # Add new record to zone.
+	{ 
+		my $sth = $self->{'dbh'}->prepare("INSERT INTO records (domain_id,name,type,content,ttl,prio) SELECT id,?,?,?,?,? FROM domains WHERE name = ?");
+		unless ( $sth->execute($name2,$type2,$content2,$ttl,$prio,$$domain) )
+		{
+			$self->_unlock;
+			return 0;
+		}
+	}
+	else # Update existing record in zone.
+	{
+		my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and domain_id = (SELECT id FROM domains WHERE name = ?)");
+		# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
+		my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$$domain);
+		unless ( $rv )
+		{
+			$self->_unlock;
+			return 0;
+			
+		}
+	}
+
+	# Release server lock.
+	$self->_unlock;
+	return 1;
 }
 
 =head2 find_record_by_content(\$content , \$domain)
@@ -522,6 +698,66 @@ sub get_master($)
 	return $master;
 }
 
+=head2 increment_serial(\$domain)
+
+Increments the serial in the SOA by one.
+Assumes the serial is an eight digit date (YYYYMMDD) followed by a two digit increment.
+Expects one scalar reference which is the domain name to update.
+Returns 1 upon succes and 0 otherwise.
+
+=cut
+
+sub increment_serial($)
+{
+	my $self = shift;
+	my $domain = shift;
+
+	# Get a server lock to avoid race condition.
+	if ( ! $self->_lock )
+	{
+		carp("Could not obtain lock.\n");
+		return 0;
+	}
+
+	my $sth = $self->{'dbh'}->prepare("SELECT content FROM records WHERE type = 'SOA' AND domain_id = (SELECT id FROM domains WHERE name = ?)");
+	unless ( $sth->execute($$domain) )
+	{
+		$self->_unlock;
+		return 0;
+	}
+
+	# Grab and split SOA into parts.
+	my $soa = $sth->fetchrow_array;
+	my @soa = split / / , $soa;
+	my $soa_date = substr($soa[2],0,8);
+	my $now_date = `date +%Y%m%d`; 
+	chomp $now_date;
+	my $soa_counter = substr($soa[2],-2);
+
+	if ( $soa_date != $now_date )
+	{
+		$soa[2] = $now_date . '00';
+	}
+	else
+	{
+		$soa_counter++;
+		$soa_counter %= 100;
+		$soa[2] = $now_date . sprintf('%02d',$soa_counter);
+	}
+
+	my $new_soa = join ' ' , @soa;
+
+	$sth = $self->{'dbh'}->prepare("UPDATE records SET content = ? WHERE type = 'SOA' AND domain_id = (SELECT id FROM domains WHERE name = ?)");
+	unless ( $sth->execute($new_soa,$$domain) )
+	{
+		$self->_unlock;
+		return 0;
+	}
+
+	$self->_unlock;
+	return 1;
+}
+
 1;
 
 =head1 EXAMPLES
@@ -585,6 +821,22 @@ sub get_master($)
 	
 	unless ( $pdns->update_record(\@rr1 , \@rr2 , \$domain) )
 	{ print "Update failed for $domain . \n"; }
+
+	my (@rr1,@rr2,$domain);
+
+	@rr1 = ('example.com','MX');
+	@rr2 = ('example.com','MX','mx.example.com');
+	$domain = 'example.com';
+
+	unless ( $pdns->update_records( \@rr1 , \@rr2 , \$domain ) )
+	{ print "Update failed for $domain . \n"; }
+
+	@rr1 = ('example.com','MX');
+	@rr2 = ('example.com','MX','mx.example.com');
+	$domain = 'example.com';
+
+	unless ( $pdns->update_or_add_records(\@rr1,\@rr2,\$domain) )
+	{ print "Could not update/add record.\n"; }
 	
 	my $domain = 'example.com';
 	my $content = 'localhost.example.com';
@@ -605,6 +857,10 @@ sub get_master($)
 
 	my $master = $pdns->get_master(\$domain);
 	print "Master: $master\n";
+
+	my $domain = 'augnix.net';
+	unless ( $pdns->increment_serial(\$domain) )
+	{ print "Could not increment serial."; }
 
 =head1 NOTES
 
@@ -667,7 +923,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.06
+	0.07
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut

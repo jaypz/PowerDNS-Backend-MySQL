@@ -1,5 +1,11 @@
 Revision history for PowerDNS-Backend-MySQL
 
+0.07	Tue Jul 29 11:39:39 PDT 2008
+	Added an example code for the update_records method.
+	Added the update_or_add_records method.
+	Add locks around critical sections.
+	Implement and document the increment_serial method.
+
 0.06	Wed May  7 15:24:50 PDT 2008
 	Added the 'update_records' method.
 
