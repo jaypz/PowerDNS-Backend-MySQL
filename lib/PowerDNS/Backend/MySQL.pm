@@ -14,11 +14,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.07
+Version 0.08
 
 =cut
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 =head1 SYNOPSIS
 
@@ -217,7 +217,7 @@ sub add_domain($)
 	my $domain = shift;
 	
 	my $sth = $self->{'dbh'}->prepare("INSERT INTO domains (name,type) VALUES (?,'NATIVE')");
-	$sth->execute($$domain) or return 0;
+	if ( $sth->execute($$domain) != 1 ) { return 0; }
 
 	return 1;
 }
@@ -391,7 +391,7 @@ sub add_record($$)
 	}
 
 	my $sth = $self->{'dbh'}->prepare("INSERT INTO records (domain_id,name,type,content,ttl,prio) SELECT id,?,?,?,?,? FROM domains WHERE name = ?");
-	unless ( $sth->execute($name,$type,$content,$ttl,$prio,$$domain) )
+	if ( $sth->execute($name,$type,$content,$ttl,$prio,$$domain) <= 0 )
 	{
 		$self->_unlock;
 		return 0;
@@ -433,7 +433,7 @@ sub delete_record($$)
 	# Release server lock.
 	$self->_unlock;
 
-	return $rv;
+	($rv > 0) ? return 1 : return 0;
 }
 
 =head2 update_record(\$rr1 , \$rr2 , \$domain)
@@ -476,13 +476,12 @@ sub update_record($$$)
 	}
 
 	my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and content=? and domain_id = (SELECT id FROM domains WHERE name = ?) LIMIT 1");
-	# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
 	my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$content1,$$domain);
 
 	# Release server lock.
 	$self->_unlock;
 	
-	$rv ? return 1 : return 0;
+	($rv > 0) ? return 1 : return 0;
 }
 
 =head2 update_records(\$rr1 , \$rr2 , \$domain)
@@ -535,7 +534,7 @@ sub update_records($$$)
 	# Release server lock.
 	$self->_unlock;
 
-	$rv ? return 1 : return 0;
+	($rv > 0) ? return 1 : return 0;
 }
 
 =head2 update_or_add_records(\$rr1 , \$rr2 , \$domain)
@@ -590,7 +589,7 @@ sub update_or_add_records($$$)
 	if ( $count == 0 ) # Add new record to zone.
 	{ 
 		my $sth = $self->{'dbh'}->prepare("INSERT INTO records (domain_id,name,type,content,ttl,prio) SELECT id,?,?,?,?,? FROM domains WHERE name = ?");
-		unless ( $sth->execute($name2,$type2,$content2,$ttl,$prio,$$domain) )
+		if ( $sth->execute($name2,$type2,$content2,$ttl,$prio,$$domain) <= 0 )
 		{
 			$self->_unlock;
 			return 0;
@@ -599,13 +598,10 @@ sub update_or_add_records($$$)
 	else # Update existing record in zone.
 	{
 		my $sth = $self->{'dbh'}->prepare("UPDATE records SET name=? , type=? , content=? , ttl=? , prio=? WHERE name=? and type=? and domain_id = (SELECT id FROM domains WHERE name = ?)");
-		# $rv is number of rows affected; it's OK for no rows to be affected; when duplicate data is being updated for example.
-		my $rv = $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$$domain);
-		unless ( $rv )
+		if ( $sth->execute($name2,$type2,$content2,$ttl,$prio,$name1,$type1,$$domain) <=0 )
 		{
 			$self->_unlock;
 			return 0;
-			
 		}
 	}
 
@@ -628,8 +624,30 @@ sub find_record_by_content($$)
 	my $content = shift;
 	my $domain = shift;
 	
-	my $sth = $self->{'dbh'}->prepare("SELECT name,type FROM records WHERE content = ? and domain_id = (SELECT id FROM domains WHERE name = ?) limit 1");
+	my $sth = $self->{'dbh'}->prepare("SELECT name,type FROM records WHERE content = ? AND domain_id = (SELECT id FROM domains WHERE name = ?) LIMIT 1");
 	$sth->execute($$content,$$domain);
+	
+	 my @records = $sth->fetchrow_array;
+	
+	return \@records;
+}
+
+=head2 find_record_by_name(\$name, \$domain)
+
+Finds a specific (single) record in the backend.
+Expects two scalar references; the first is the name we are looking for, and the second is the domain to be checked.
+Returns a reference to an array that contains the content and type from the found record, if any.
+
+=cut
+
+sub find_record_by_name($$)
+{
+	my $self = shift;
+	my $name = shift;
+	my $domain = shift;
+	
+	my $sth = $self->{'dbh'}->prepare("SELECT content,type FROM records WHERE name = ? AND domain_id = (SELECT id FROM domains WHERE name = ?) LIMIT 1");
+	$sth->execute($$name,$$domain);
 	
 	 my @records = $sth->fetchrow_array;
 	
@@ -728,6 +746,10 @@ sub increment_serial($)
 
 	# Grab and split SOA into parts.
 	my $soa = $sth->fetchrow_array;
+
+	unless ($soa)
+	{ return 0; }
+	
 	my @soa = split / / , $soa;
 	my $soa_date = substr($soa[2],0,8);
 	my $now_date = `date +%Y%m%d`; 
@@ -748,7 +770,7 @@ sub increment_serial($)
 	my $new_soa = join ' ' , @soa;
 
 	$sth = $self->{'dbh'}->prepare("UPDATE records SET content = ? WHERE type = 'SOA' AND domain_id = (SELECT id FROM domains WHERE name = ?)");
-	unless ( $sth->execute($new_soa,$$domain) )
+	if ( $sth->execute($new_soa,$$domain) <= 0 )
 	{
 		$self->_unlock;
 		return 0;
@@ -846,6 +868,13 @@ sub increment_serial($)
 	print "Type: $type\n";
 
 	my $domain = 'example.com';
+	my $name = 'localhost.example.com';
+	my $records = $pdns->find_record_by_name(\$name, \$domain);
+	my ($content, $type) = @$records;
+	print "Content: $content\n";
+	print "Type: $type\n";
+
+	my $domain = 'example.com';
 	$pdns->make_domain_native(\$domain);
 
 	my $domain = 'example.com';
@@ -923,7 +952,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.07
+	0.08
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
