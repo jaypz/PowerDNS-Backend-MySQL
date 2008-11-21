@@ -1,5 +1,8 @@
 Revision history for PowerDNS-Backend-MySQL
 
+0.09	Fri Nov 21 11:42:28 PST 2008
+	Adding the 'list_domain_names_by_type' method.
+
 0.08	Fri Aug  1 09:37:48 PDT 2008
 	Adding the 'find_record_by_name' method.
 	Better return value checking on all methods; in some cases 'true' could have been returned when in-fact the action was not performed.

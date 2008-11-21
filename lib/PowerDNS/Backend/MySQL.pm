@@ -14,11 +14,11 @@ PowerDNS::Backend::MySQL - Provides an interface to manipulate PowerDNS data in 
 
 =head1 VERSION
 
-Version 0.08
+Version 0.09
 
 =cut
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 =head1 SYNOPSIS
 
@@ -287,6 +287,29 @@ sub list_domain_names
 	# Grab the domain names.
 	my $sth = $self->{'dbh'}->prepare("SELECT name FROM domains");
 	$sth->execute;
+
+	while ( my ($domain) = $sth->fetchrow_array )
+	{ push @domains , $domain; }
+
+	return \@domains;
+}
+
+=head2 list_domain_names_by_type(\$type)
+
+Expects a scalar reference to a string which is the domain 'type' (i.e. NATIVE, SLAVE, MASTER, etc.)
+Returns a reference to an array which contains all the domain names of that type.
+
+=cut
+
+sub list_domain_names_by_type($)
+{
+	my $self = shift;
+	my $type = shift;
+	my @domains;
+
+	# Grab the domain names.
+	my $sth = $self->{'dbh'}->prepare("SELECT name FROM domains WHERE type = ?");
+	$sth->execute($$type);
 
 	while ( my ($domain) = $sth->fetchrow_array )
 	{ push @domains , $domain; }
@@ -814,6 +837,12 @@ sub increment_serial($)
 	for my $domain (@$domain_names)
 	{ print "$domain \n"; }
 
+	my $type = 'NATIVE';
+	my $domain_names = $pdns->list_domain_names_by_type(\$type);
+
+	for my $domain (@$domain_names)
+	{ print "$domain \n"; }
+
 	my $master = '127.0.0.1';
 	my $domain_names = $pdns->list_slave_domain_names(\$master);
 
@@ -952,7 +981,7 @@ under the same terms as Perl itself.
 
 =head1 VERSION
 
-	0.08
+	0.09
 	$Id: MySQL.pm 1480 2007-12-04 19:29:23Z augie $
 
 =cut
